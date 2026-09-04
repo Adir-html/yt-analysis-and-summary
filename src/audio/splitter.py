@@ -1,9 +1,14 @@
 """Audio file splitting utilities.
 
 Splits large audio files into consecutive chunks of at most
-``DEFAULT_CHUNK_DURATION`` seconds using ffmpeg's segment muxer.
-Stream copy is used (``-c copy``) so no re-encoding occurs — this is fast
-and lossless.
+``DEFAULT_CHUNK_DURATION`` seconds. Each chunk is produced with its own
+ffmpeg ``-ss``/``-t`` cut so a configurable number of seconds at the tail of
+chunk N is *repeated* at the head of chunk N+1 (the overlap). This way speech
+that straddles a boundary is heard in full by at least one chunk instead of
+being cut mid-word.
+
+When ``overlap_seconds`` is 0 the chunks are back-to-back, exactly like the
+old ``-f segment`` behaviour.
 """
 
 import shutil
@@ -18,21 +23,40 @@ from ..utils.logging import logger
 # 10 minutes) to stay safely within the limit.
 DEFAULT_CHUNK_DURATION = 590
 
+# Seconds of tail overlap between consecutive chunks when none is configured.
+# Each chunk starts this long before the previous one ends.
+DEFAULT_CHUNK_OVERLAP = 0
+
 # Prefix for the temporary directory that split_audio creates. cleanup_chunks
 # uses it to recognise (and only ever remove) temp dirs it owns, never a
 # directory that happens to contain a user's files.
 _TEMP_DIR_PREFIX = "yt-split-"
 
 
-def split_audio(audio_path: Path, chunk_duration: int = DEFAULT_CHUNK_DURATION) -> list[Path]:
-    """Split *audio_path* into consecutive chunks of at most *chunk_duration* seconds.
+def split_audio(
+    audio_path: Path,
+    chunk_duration: int = DEFAULT_CHUNK_DURATION,
+    overlap_seconds: int = DEFAULT_CHUNK_OVERLAP,
+) -> list[Path]:
+    """Split *audio_path* into overlapping chunks of at most *chunk_duration* seconds.
+
+    Chunk k covers the window ``[k*step, k*step + chunk_duration]`` where
+    ``step = chunk_duration - overlap_seconds``. Because each successive chunk
+    starts ``overlap_seconds`` before its predecessor ends, the tail of one
+    chunk is repeated at the head of the next. This keeps boundary-straddling
+    speech intact in at least one chunk; the overlap is later folded away by the
+    transcription/summarisation step.
 
     If the file is shorter than *chunk_duration* or ffmpeg is unavailable,
     a single-element list containing *audio_path* is returned (no split).
 
     Args:
         audio_path: Path to the input audio file (any ffmpeg-supported format).
-        chunk_duration: Maximum duration of each chunk in seconds.
+        chunk_duration: Maximum duration of each chunk in seconds (the amount of
+            *new* audio per chunk; the overlap makes the on-disk chunk slightly
+            larger only when ``overlap_seconds`` is non-zero).
+        overlap_seconds: Seconds of tail overlap shared between consecutive
+            chunks. 0 produces back-to-back chunks (the historical behaviour).
 
     Returns:
         Ordered list of chunk file paths. The first element is the
@@ -51,36 +75,41 @@ def split_audio(audio_path: Path, chunk_duration: int = DEFAULT_CHUNK_DURATION) 
         logger.warning("ffmpeg not found — cannot split audio file. " "Returning unsplit file.")
         return [audio_path]
 
+    # The amount of *new* audio each chunk adds. When there's no overlap this is
+    # just the chunk duration (identical to the old segment-muxer behaviour).
+    step = max(1, chunk_duration - overlap_seconds)
+
     # Create a temporary directory for the chunk files.
     temp_dir = Path(tempfile.mkdtemp(prefix=_TEMP_DIR_PREFIX))
-    chunk_pattern = temp_dir / "part_%03d.mp3"
+    chunks: list[Path] = []
 
-    cmd = [
-        ffmpeg_exe,
-        "-y",  # overwrite outputs
-        "-i",
-        str(audio_path),
-        "-f",
-        "segment",
-        "-segment_time",
-        str(chunk_duration),
-        "-c",
-        "copy",
-        "-reset_timestamps",
-        "1",
-        str(chunk_pattern),
-    ]
+    logger.info(
+        f"Splitting {audio_path.name} into {chunk_duration}s chunks "
+        f"({overlap_seconds}s overlap)..."
+    )
 
-    logger.info(f"Splitting {audio_path.name} into {chunk_duration}s chunks...")
-    try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except subprocess.SubprocessError as exc:
-        logger.warning(f"ffmpeg split failed ({exc}); returning unsplit file.")
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        return [audio_path]
+    index = 0
+    start = 0.0
+    while True:
+        stop = min(start + chunk_duration, duration) if duration is not None else chunk_duration
+        chunk_path = temp_dir / f"part_{index:03d}.mp3"
+        try:
+            _extract_window(ffmpeg_exe, audio_path, chunk_path, start, stop)
+        except subprocess.SubprocessError as exc:
+            logger.warning(f"Chunk {index} split failed ({exc}); returning unsplit file.")
+            cleanup_chunks(chunks)
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return [audio_path]
+        chunks.append(chunk_path)
+        index += 1
 
-    # Collect chunk files in order.
-    chunks = sorted(temp_dir.glob("part_*.mp3"))
+        if duration is None:
+            # Unknown duration — one whole-file chunk is the safe fallback.
+            break
+        start += step
+        if start >= duration:
+            break
+
     if not chunks:
         logger.warning("ffmpeg produced no chunks; returning unsplit file.")
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -88,6 +117,33 @@ def split_audio(audio_path: Path, chunk_duration: int = DEFAULT_CHUNK_DURATION) 
 
     logger.info(f"Split into {len(chunks)} chunk(s).")
     return chunks
+
+
+def _extract_window(
+    ffmpeg_exe: str, audio_path: Path, out_path: Path, start: float, stop: float
+) -> None:
+    """Cut *audio_path* to the closed ``[start, stop]`` window into *out_path*.
+
+    ``-ss`` is given as an *input* option (before ``-i``) so ffmpeg seeks
+    accurately instead of streaming from the start; ``-t`` then caps the output
+    length. The audio is re-encoded (no ``-c copy``) so cuts can land on any
+    sample boundary — required for sub-second overlapping windows, which the
+    key-frame-copy only segment muxer could not do.
+    """
+    length = stop - start
+    cmd = [
+        ffmpeg_exe,
+        "-y",  # overwrite outputs
+        "-ss",
+        f"{start:.3f}",
+        "-i",
+        str(audio_path),
+        "-t",
+        f"{length:.3f}",
+        "-vn",
+        str(out_path),
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def cleanup_chunks(chunks: list[Path]) -> None:

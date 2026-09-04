@@ -50,9 +50,17 @@ _CHAT_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Bullet-point summary prompt, with the transcript substituted in.
 _SUMMARY_PROMPT = (
     "Summarise the following transcript in bullet points, focusing on the "
-    "main ideas, arguments, and conclusions. Write detailed but concise "
-    "summaries. Finally, write 1 sentence summarising the key takeaway. "
-    "Use concise language.\n\n"
+    "main ideas, arguments, and conclusions. Leave out any appearing advertising or promotion."
+    "Write detailed but concise summaries. Finally, write 1 sentence summarising the key takeaway. "
+    "Use concise language."
+    "\n\n"
+    "The transcript may have been stitched together from multiple audio parts; "
+    "sections are separated by '--- Part ... ---' markers. Consecutive parts may "
+    "overlap slightly, so a short stretch of text can appear twice at a seam. "
+    "Treat the parts as one continuous source: read across the markers, cover "
+    "each idea exactly once, and do not double-count a repeated seam or treat "
+    "repeated wording as emphasis."
+    "\n\n Transcript:\n\n"
     "```\n{transcript}\n```"
 )
 
@@ -205,7 +213,11 @@ def transcribe_split(audio_path: Path, chunk_duration: int | None = None) -> str
     """
     if chunk_duration is None:
         chunk_duration = config.chunk_duration()
-    chunks = split_audio(audio_path, chunk_duration=chunk_duration)
+    chunks = split_audio(
+        audio_path,
+        chunk_duration=chunk_duration,
+        overlap_seconds=config.chunk_overlap(),
+    )
 
     logger.info(f"Transcribing {len(chunks)} chunk(s) from {audio_path.name}")
 
