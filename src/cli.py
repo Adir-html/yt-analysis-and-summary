@@ -106,6 +106,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--overlap-seconds",
+        type=int,
+        default=None,
+        help=(
+            "Seconds of tail overlap between consecutive split chunks, so speech "
+            "straddling a boundary is heard in full. Only relevant with --split. "
+            "Defaults to the OPENROUTER_CHUNK_OVERLAP env var (else 3)."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Show debug-level log output",
@@ -125,10 +135,16 @@ class Options:
     no_summary: bool
     force: bool
     split: bool
+    overlap_seconds: int | None = None
 
 
 def _options_from_args(args: argparse.Namespace) -> Options:
-    return Options(no_summary=args.no_summary, force=args.force, split=args.split)
+    return Options(
+        no_summary=args.no_summary,
+        force=args.force,
+        split=args.split,
+        overlap_seconds=args.overlap_seconds,
+    )
 
 
 def process_single_url(url: str, out_dir: Path, opts: Options) -> bool:
@@ -148,7 +164,11 @@ def process_single_url(url: str, out_dir: Path, opts: Options) -> bool:
         console.print(f"[green]Audio ready at:[/] {audio_path}")
 
         console.print("[bold cyan]Transcribing audio…[/]")
-        transcript = transcribe_split(audio_path) if opts.split else transcribe(audio_path)
+        transcript = (
+            transcribe_split(audio_path, overlap_seconds=opts.overlap_seconds)
+            if opts.split
+            else transcribe(audio_path)
+        )
 
         base_name = audio_path.stem
         _save_transcript(transcript, out_dir, base_name)

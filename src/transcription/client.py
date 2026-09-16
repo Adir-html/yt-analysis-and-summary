@@ -194,7 +194,11 @@ def transcribe(audio_path: Path) -> str:
     return data.get("text", "").strip()
 
 
-def transcribe_split(audio_path: Path, chunk_duration: int | None = None) -> str:
+def transcribe_split(
+    audio_path: Path,
+    chunk_duration: int | None = None,
+    overlap_seconds: int | None = None,
+) -> str:
     """Transcribe *audio_path*, splitting into chunks if too long.
 
     If the audio exceeds *chunk_duration* seconds, it is split into
@@ -207,16 +211,22 @@ def transcribe_split(audio_path: Path, chunk_duration: int | None = None) -> str
         chunk_duration: Maximum seconds per chunk (defaults to the
             ``OPENROUTER_CHUNK_SECONDS`` env var, else
             ``audio.splitter.DEFAULT_CHUNK_DURATION``).
+        overlap_seconds: Seconds of tail overlap between consecutive chunks so
+            boundary-straddling speech is heard in full (defaults to the
+            ``OPENROUTER_CHUNK_OVERLAP`` env var, else
+            ``audio.splitter.DEFAULT_CHUNK_OVERLAP``).
 
     Returns:
         The combined transcript string.
     """
     if chunk_duration is None:
         chunk_duration = config.chunk_duration()
+    if overlap_seconds is None:
+        overlap_seconds = config.chunk_overlap()
     chunks = split_audio(
         audio_path,
         chunk_duration=chunk_duration,
-        overlap_seconds=config.chunk_overlap(),
+        overlap_seconds=overlap_seconds,
     )
 
     logger.info(f"Transcribing {len(chunks)} chunk(s) from {audio_path.name}")

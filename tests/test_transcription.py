@@ -64,6 +64,26 @@ class TestTranscribeSplit:
 
         assert transcription_ctx.split_audio.call_args.kwargs["chunk_duration"] == 42
 
+    def test_default_overlap_from_config(self, audio_file, transcription_ctx, monkeypatch):
+        """When no overlap is given, the configured env value is used."""
+        audio = audio_file("video.mp3")
+        transcription_ctx.split_audio.return_value = [audio]
+        monkeypatch.setenv("OPENROUTER_CHUNK_OVERLAP", "7")
+
+        transcribe_split(audio)
+
+        assert transcription_ctx.split_audio.call_args.kwargs["overlap_seconds"] == 7
+
+    def test_explicit_overlap_overrides_config(self, audio_file, transcription_ctx, monkeypatch):
+        """An explicitly passed overlap wins over the env value."""
+        audio = audio_file("video.mp3")
+        transcription_ctx.split_audio.return_value = [audio]
+        monkeypatch.setenv("OPENROUTER_CHUNK_OVERLAP", "7")
+
+        transcribe_split(audio, overlap_seconds=11)
+
+        assert transcription_ctx.split_audio.call_args.kwargs["overlap_seconds"] == 11
+
     def test_cleanup_called_after_split(self, audio_file, chunk_files, transcription_ctx):
         """cleanup_chunks is invoked with the produced chunks when splitting."""
         audio = audio_file("video.mp3")

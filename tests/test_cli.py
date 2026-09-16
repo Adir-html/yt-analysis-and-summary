@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-from src.cli import main, read_urls_from_file, validate_youtube_url
+from src.cli import _options_from_args, main, parse_args, read_urls_from_file, validate_youtube_url
 
 
 class TestValidateYoutubeUrl:
@@ -34,6 +34,47 @@ class TestReadUrlsFromFile:
         path.write_text("# only comments\n", encoding="utf-8")
         with pytest.raises(ValueError):
             read_urls_from_file(path)
+
+
+class TestOverlapSecondsFlag:
+    """Parsing of the --overlap-seconds CLI flag."""
+
+    def test_default_is_none(self, monkeypatch):
+        """Without the flag, Options carries None so config supplies the default."""
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["prog", "--url", "https://youtu.be/abc123DEF-_", "--split"],
+        )
+        opts = _options_from_args(parse_args())
+        assert opts.overlap_seconds is None
+
+    def test_flag_value_parsed(self, monkeypatch):
+        """The flag value flows through to Options."""
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["prog", "--url", "https://youtu.be/abc123DEF-_", "--split", "--overlap-seconds", "8"],
+        )
+        opts = _options_from_args(parse_args())
+        assert opts.overlap_seconds == 8
+
+    def test_flag_rejects_non_int(self, monkeypatch):
+        """argparse rejects a non-integer value."""
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "prog",
+                "--url",
+                "https://youtu.be/abc123DEF-_",
+                "--split",
+                "--overlap-seconds",
+                "lots",
+            ],
+        )
+        with pytest.raises(SystemExit):
+            parse_args()
 
 
 class TestMainExitCodes:
