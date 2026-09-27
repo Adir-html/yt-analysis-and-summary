@@ -109,8 +109,8 @@ class TestSplitAudio:
 
         assert chunks == [audio]
 
-    def test_no_duration_info_still_tries_split(self, tmp_path):
-        """If duration can't be determined, still attempt the split."""
+    def test_unknown_duration_splits_until_eof(self, tmp_path):
+        """Without duration info, the segment muxer cuts until EOF — no dropped audio."""
         audio = tmp_path / "unknown.mp3"
         audio.write_bytes(b"")
 
@@ -120,14 +120,42 @@ class TestSplitAudio:
             patch("src.audio.splitter.subprocess.run") as mock_run,
             patch("src.audio.splitter.tempfile.mkdtemp", return_value=str(tmp_path / "tmp")),
         ):
+            # The muxer decides the chunk count itself at EOF; simulate it
+            # producing two chunks.
             (tmp_path / "tmp").mkdir(exist_ok=True)
-            (tmp_path / "tmp" / "part_000.mp3").write_bytes(b"")
+            for name in ("part_000.mp3", "part_001.mp3"):
+                (tmp_path / "tmp" / name).write_bytes(b"")
             mock_run.return_value = MagicMock(returncode=0)
 
             chunks = split_audio(audio, chunk_duration=590)
 
-        assert len(chunks) == 1
-        mock_run.assert_called_once()
+        # Everything the muxer produced is returned — nothing truncated to a
+        # single 590s window.
+        assert [c.name for c in chunks] == ["part_000.mp3", "part_001.mp3"]
+        # A single ffmpeg invocation, of the segment muxer (no per-chunk
+        # -ss/-t window loop that would need the total duration).
+        cmd = mock_run.call_args.args[0]
+        assert cmd[cmd.index("-f") + 1] == "segment"
+
+    def test_unknown_duration_ffmpeg_failure_fallback(self, tmp_path):
+        """A failing segment muxer falls back to the original file unsplit."""
+        import subprocess
+
+        audio = tmp_path / "unknown.mp3"
+        audio.write_bytes(b"")
+
+        with (
+            patch("src.audio.splitter._get_audio_duration", return_value=None),
+            patch("src.audio.splitter.shutil.which", return_value="/usr/bin/ffmpeg"),
+            patch(
+                "src.audio.splitter.subprocess.run",
+                side_effect=subprocess.CalledProcessError(1, "ffmpeg"),
+            ),
+            patch("src.audio.splitter.tempfile.mkdtemp", return_value=str(tmp_path / "tmp")),
+        ):
+            chunks = split_audio(audio, chunk_duration=590)
+
+        assert chunks == [audio]
 
 
 class TestCleanupChunks:

@@ -81,34 +81,46 @@ def split_audio(
 
     # Create a temporary directory for the chunk files.
     temp_dir = Path(tempfile.mkdtemp(prefix=_TEMP_DIR_PREFIX))
-    chunks: list[Path] = []
 
-    logger.info(
-        f"Splitting {audio_path.name} into {chunk_duration}s chunks "
-        f"({overlap_seconds}s overlap)..."
-    )
-
-    index = 0
-    start = 0.0
-    while True:
-        stop = min(start + chunk_duration, duration) if duration is not None else chunk_duration
-        chunk_path = temp_dir / f"part_{index:03d}.mp3"
+    if duration is None:
+        # Duration couldn't be probed (e.g. ffprobe missing or failing). The
+        # -ss/-t window path needs the total duration to know where the file
+        # ends, so fall back to ffmpeg's segment muxer instead: it cuts until
+        # EOF on its own, dropping no audio. The tail overlap is not applied
+        # on this path (it needs absolute window starts, which need the total
+        # duration); chunks are back-to-back like an overlap of 0.
         try:
-            _extract_window(ffmpeg_exe, audio_path, chunk_path, start, stop)
+            chunks = _split_unknown_duration(ffmpeg_exe, audio_path, temp_dir, chunk_duration)
         except subprocess.SubprocessError as exc:
-            logger.warning(f"Chunk {index} split failed ({exc}); returning unsplit file.")
-            cleanup_chunks(chunks)
+            logger.warning(f"Split failed ({exc}); returning unsplit file.")
             shutil.rmtree(temp_dir, ignore_errors=True)
             return [audio_path]
-        chunks.append(chunk_path)
-        index += 1
+    else:
+        logger.info(
+            f"Splitting {audio_path.name} into {chunk_duration}s chunks "
+            f"({overlap_seconds}s overlap)..."
+        )
 
-        if duration is None:
-            # Unknown duration — one whole-file chunk is the safe fallback.
-            break
-        start += step
-        if start >= duration:
-            break
+        chunks: list[Path] = []
+
+        index = 0
+        start = 0.0
+        while True:
+            stop = min(start + chunk_duration, duration)
+            chunk_path = temp_dir / f"part_{index:03d}.mp3"
+            try:
+                _extract_window(ffmpeg_exe, audio_path, chunk_path, start, stop)
+            except subprocess.SubprocessError as exc:
+                logger.warning(f"Chunk {index} split failed ({exc}); returning unsplit file.")
+                cleanup_chunks(chunks)
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return [audio_path]
+            chunks.append(chunk_path)
+            index += 1
+
+            start += step
+            if start >= duration:
+                break
 
     if not chunks:
         logger.warning("ffmpeg produced no chunks; returning unsplit file.")
@@ -144,6 +156,42 @@ def _extract_window(
         str(out_path),
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _split_unknown_duration(
+    ffmpeg_exe: str,
+    audio_path: Path,
+    temp_dir: Path,
+    chunk_duration: int,
+) -> list[Path]:
+    """Split *audio_path* into chunks without knowing its total duration.
+
+    Used when probing fails: ffmpeg's segment muxer cuts repeatedly until EOF
+    by itself, so unknown-length inputs lose no audio (the ``-ss``/``-t``
+    window path needs the total duration to place the final window). Unlike
+    the old segment-muxer implementation, chunks are re-encoded (no ``-c
+    copy``) so boundaries land on sample positions rather than keyframes.
+
+    Returns:
+        Produced chunk files sorted by name (the temp dir is searched for
+        ``part_*.mp3``); an empty list means nothing was written.
+    """
+    cmd = [
+        ffmpeg_exe,
+        "-y",  # overwrite outputs
+        "-i",
+        str(audio_path),
+        "-f",
+        "segment",
+        "-segment_time",
+        str(chunk_duration),
+        "-reset_timestamps",
+        "1",
+        "-vn",
+        str(temp_dir / "part_%03d.mp3"),
+    ]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return sorted(temp_dir.glob("part_*.mp3"))
 
 
 def cleanup_chunks(chunks: list[Path]) -> None:
