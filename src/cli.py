@@ -108,10 +108,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--overlap-seconds",
         type=int,
-        default=None,
         help=(
             "Seconds of tail overlap between consecutive split chunks, so speech "
             "straddling a boundary is heard in full. Only relevant with --split. "
+            "Must be >= 0 and smaller than the chunk duration. "
             "Defaults to the OPENROUTER_CHUNK_OVERLAP env var (else 3)."
         ),
     )

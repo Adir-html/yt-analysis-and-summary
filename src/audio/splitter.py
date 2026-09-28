@@ -16,16 +16,22 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from .. import config
 from ..utils.logging import logger
 
 # YouTube videos longer than ~10 minutes can exceed the OpenRouter
 # transcription API's input limit. We split at 590 seconds (just under
-# 10 minutes) to stay safely within the limit.
+# 10 minutes) to stay safely within the limit. This constant is the single
+# source of truth: :func:`src.config.chunk_duration` falls back to it when
+# ``OPENROUTER_CHUNK_SECONDS`` is unset.
 DEFAULT_CHUNK_DURATION = 590
 
 # Seconds of tail overlap between consecutive chunks when none is configured.
-# Each chunk starts this long before the previous one ends.
-DEFAULT_CHUNK_OVERLAP = 0
+# Each chunk starts this many seconds before the previous one ends. This is the
+# single source of truth for the overlap default (3s): :func:`src.config.chunk_overlap`
+# falls back to it when ``OPENROUTER_CHUNK_OVERLAP`` is unset, so direct callers
+# of :func:`split_audio` get the same default as the CLI.
+DEFAULT_CHUNK_OVERLAP = 3
 
 # Prefix for the temporary directory that split_audio creates. cleanup_chunks
 # uses it to recognise (and only ever remove) temp dirs it owns, never a
@@ -35,8 +41,8 @@ _TEMP_DIR_PREFIX = "yt-split-"
 
 def split_audio(
     audio_path: Path,
-    chunk_duration: int = DEFAULT_CHUNK_DURATION,
-    overlap_seconds: int = DEFAULT_CHUNK_OVERLAP,
+    chunk_duration: int | None = None,
+    overlap_seconds: int | None = None,
 ) -> list[Path]:
     """Split *audio_path* into overlapping chunks of at most *chunk_duration* seconds.
 
@@ -52,16 +58,43 @@ def split_audio(
 
     Args:
         audio_path: Path to the input audio file (any ffmpeg-supported format).
-        chunk_duration: Maximum duration of each chunk in seconds (the amount of
-            *new* audio per chunk; the overlap makes the on-disk chunk slightly
-            larger only when ``overlap_seconds`` is non-zero).
+        chunk_duration: Length of each chunk's window in seconds. The *new*
+            audio each chunk adds is ``chunk_duration - overlap_seconds`` (with
+            a non-zero overlap the on-disk chunk repeats that many seconds of
+            the previous chunk's tail). Defaults to
+            :func:`src.config.chunk_duration` (``OPENROUTER_CHUNK_SECONDS`` env
+            var, else :data:`DEFAULT_CHUNK_DURATION`).
         overlap_seconds: Seconds of tail overlap shared between consecutive
             chunks. 0 produces back-to-back chunks (the historical behaviour).
+            Must satisfy ``0 <= overlap_seconds < chunk_duration``. Defaults to
+            :func:`src.config.chunk_overlap` (``OPENROUTER_CHUNK_OVERLAP`` env
+            var, else :data:`DEFAULT_CHUNK_OVERLAP`).
 
     Returns:
         Ordered list of chunk file paths. The first element is the
         beginning of the file and the last element is the end.
+
+    Raises:
+        ValueError: If *overlap_seconds* is negative or not smaller than
+            *chunk_duration*.
     """
+    if chunk_duration is None:
+        chunk_duration = config.chunk_duration()
+    if overlap_seconds is None:
+        overlap_seconds = config.chunk_overlap()
+
+    # An overlap of 0 is back-to-back; a negative one would create gaps between
+    # chunks, and one >= the chunk duration would make every chunk re-start
+    # before the previous one, yielding hundreds of tiny chunks. Reject both
+    # rather than silently warping the chunk layout.
+    if overlap_seconds < 0:
+        raise ValueError(f"overlap_seconds must be >= 0, got {overlap_seconds}")
+    if overlap_seconds >= chunk_duration:
+        raise ValueError(
+            f"overlap_seconds ({overlap_seconds}) must be smaller than "
+            f"chunk_duration ({chunk_duration})"
+        )
+
     # Short-enough files are returned unchanged — no need to split.
     duration = _get_audio_duration(audio_path)
     if duration is not None and duration <= chunk_duration:
@@ -77,7 +110,8 @@ def split_audio(
 
     # The amount of *new* audio each chunk adds. When there's no overlap this is
     # just the chunk duration (identical to the old segment-muxer behaviour).
-    step = max(1, chunk_duration - overlap_seconds)
+    # Validation above guarantees 1 <= step (overlap < chunk_duration).
+    step = chunk_duration - overlap_seconds
 
     # Create a temporary directory for the chunk files.
     temp_dir = Path(tempfile.mkdtemp(prefix=_TEMP_DIR_PREFIX))

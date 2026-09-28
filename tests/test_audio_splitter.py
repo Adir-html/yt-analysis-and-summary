@@ -3,6 +3,8 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from src.audio.splitter import _get_audio_duration, cleanup_chunks, split_audio
 
 
@@ -43,7 +45,7 @@ class TestSplitAudio:
             patch("src.audio.splitter.tempfile.mkdtemp", return_value=str(tmp_path / "tmp")),
         ):
             (tmp_path / "tmp").mkdir(exist_ok=True)
-            chunks = split_audio(audio, chunk_duration=590)
+            chunks = split_audio(audio, chunk_duration=590, overlap_seconds=0)
 
         assert [c.name for c in chunks] == [
             "part_000.mp3",
@@ -54,6 +56,43 @@ class TestSplitAudio:
         assert mock_run.call_count == 3
         windows = _extract_windows(mock_run)
         assert windows == [(0.0, 590.0), (590.0, 590.0), (1180.0, 320.0)]
+
+    def test_default_overlap_resolves_through_config(self, tmp_path, monkeypatch):
+        """Without an overlap arg, the config/env default (not 0) is applied."""
+        audio = tmp_path / "long.mp3"
+        audio.write_bytes(b"")
+        monkeypatch.setenv("OPENROUTER_CHUNK_OVERLAP", "5")
+
+        with (
+            patch("src.audio.splitter._get_audio_duration", return_value=1180.0),
+            patch("src.audio.splitter.shutil.which", return_value="/usr/bin/ffmpeg"),
+            patch("src.audio.splitter.subprocess.run") as mock_run,
+            patch("src.audio.splitter.tempfile.mkdtemp", return_value=str(tmp_path / "tmp")),
+        ):
+            (tmp_path / "tmp").mkdir(exist_ok=True)
+            chunks = split_audio(audio, chunk_duration=590)  # overlap left as None
+
+        assert len(chunks) == 3
+        windows = _extract_windows(mock_run)
+        # With 5s overlap, chunk 1 starts at 1180 - 590 - 5 = 585.0 instead of 590.0.
+        assert windows[0] == (0.0, 590.0)
+        assert windows[1] == (585.0, 590.0)
+
+    def test_negative_overlap_rejected(self, tmp_path):
+        """A negative overlap would create gaps between chunks — reject it."""
+        audio = tmp_path / "long.mp3"
+        audio.write_bytes(b"")
+
+        with pytest.raises(ValueError, match=">= 0"):
+            split_audio(audio, chunk_duration=590, overlap_seconds=-1)
+
+    def test_overlap_not_smaller_than_chunk_duration_rejected(self, tmp_path):
+        """An overlap >= the chunk duration would explode the chunk count."""
+        audio = tmp_path / "long.mp3"
+        audio.write_bytes(b"")
+
+        with pytest.raises(ValueError, match="smaller than chunk_duration"):
+            split_audio(audio, chunk_duration=590, overlap_seconds=590)
 
     def test_overlap_rewinds_chunk_start(self, tmp_path):
         """With an overlap, each chunk starts earlier so seams repeat speech."""

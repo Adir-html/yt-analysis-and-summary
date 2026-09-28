@@ -64,8 +64,14 @@ def max_tokens() -> int:
 
 
 def chunk_duration() -> int:
-    """Maximum seconds per audio chunk for ``--split`` (env-overridable)."""
-    return int(get_env("OPENROUTER_CHUNK_SECONDS") or 590)
+    """Maximum seconds per audio chunk for ``--split`` (env-overridable).
+
+    Defaults to ``audio.splitter.DEFAULT_CHUNK_DURATION`` (590s — just under
+    the ~10-minute transcription API limit) when the env var is unset.
+    """
+    from .audio.splitter import DEFAULT_CHUNK_DURATION
+
+    return int(get_env("OPENROUTER_CHUNK_SECONDS") or DEFAULT_CHUNK_DURATION)
 
 
 def chunk_overlap() -> int:
@@ -76,5 +82,11 @@ def chunk_overlap() -> int:
     of being cut mid-word. The transcription becomes partially self-overlapping;
     the summary prompt is told about the overlap so duplicated seams are folded
     away rather than double-counted.
+
+    Defaults to ``audio.splitter.DEFAULT_CHUNK_OVERLAP`` (3s) when the env var
+    is unset, so direct callers of ``split_audio`` get the same default as the
+    CLI.
     """
-    return int(get_env("OPENROUTER_CHUNK_OVERLAP") or 3)
+    from .audio.splitter import DEFAULT_CHUNK_OVERLAP
+
+    return int(get_env("OPENROUTER_CHUNK_OVERLAP") or DEFAULT_CHUNK_OVERLAP)

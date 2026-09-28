@@ -50,7 +50,7 @@ _CHAT_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Bullet-point summary prompt, with the transcript substituted in.
 _SUMMARY_PROMPT = (
     "Summarise the following transcript in bullet points, focusing on the "
-    "main ideas, arguments, and conclusions. Leave out any appearing advertising or promotion."
+    "main ideas, arguments, and conclusions. Leave out any appearing advertising or promotion. "
     "Write detailed but concise summaries. Finally, write 1 sentence summarising the key takeaway. "
     "Use concise language."
     "\n\n"
