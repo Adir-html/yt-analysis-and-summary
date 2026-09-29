@@ -6,6 +6,17 @@ from unittest.mock import MagicMock, patch
 from src.audio.splitter import _get_audio_duration, cleanup_chunks, split_audio
 
 
+def _extract_windows(mock_run) -> list[tuple[float, float]]:
+    """Return the ``(start, length)`` window parsed from each ffmpeg call's args."""
+    windows = []
+    for call in mock_run.call_args_list:
+        cmd = call.args[0]
+        start = float(cmd[cmd.index("-ss") + 1])
+        length = float(cmd[cmd.index("-t") + 1])
+        windows.append((start, length))
+    return windows
+
+
 class TestSplitAudio:
     """Tests for the split_audio function."""
 
@@ -31,11 +42,7 @@ class TestSplitAudio:
             patch("src.audio.splitter.subprocess.run") as mock_run,
             patch("src.audio.splitter.tempfile.mkdtemp", return_value=str(tmp_path / "tmp")),
         ):
-            tmp_dir = tmp_path / "tmp"
-            tmp_dir.mkdir(exist_ok=True)
-            for i in range(3):
-                (tmp_dir / f"part_{i:03d}.mp3").write_bytes(b"")
-
+            (tmp_path / "tmp").mkdir(exist_ok=True)
             chunks = split_audio(audio, chunk_duration=590)
 
         assert [c.name for c in chunks] == [
@@ -43,9 +50,31 @@ class TestSplitAudio:
             "part_001.mp3",
             "part_002.mp3",
         ]
-        mock_run.assert_called_once()
-        cmd = mock_run.call_args[0][0]
-        assert "-f" in cmd and "segment" in cmd and "590" in cmd
+        # One ffmpeg cut per chunk, back-to-back when overlap is 0.
+        assert mock_run.call_count == 3
+        windows = _extract_windows(mock_run)
+        assert windows == [(0.0, 590.0), (590.0, 590.0), (1180.0, 320.0)]
+
+    def test_overlap_rewinds_chunk_start(self, tmp_path):
+        """With an overlap, each chunk starts earlier so seams repeat speech."""
+        audio = tmp_path / "long.mp3"
+        audio.write_bytes(b"")
+
+        with (
+            patch("src.audio.splitter._get_audio_duration", return_value=1180.0),
+            patch("src.audio.splitter.shutil.which", return_value="/usr/bin/ffmpeg"),
+            patch("src.audio.splitter.subprocess.run") as mock_run,
+            patch("src.audio.splitter.tempfile.mkdtemp", return_value=str(tmp_path / "tmp")),
+        ):
+            (tmp_path / "tmp").mkdir(exist_ok=True)
+            chunks = split_audio(audio, chunk_duration=590, overlap_seconds=3)
+
+        assert len(chunks) == 3
+        windows = _extract_windows(mock_run)
+        # Chunk 2 would start at 590.0 back-to-back; with 3s overlap it starts at 587.0.
+        assert windows[0] == (0.0, 590.0)
+        assert windows[1][0] == 587.0
+        assert windows[1][1] == 590.0
 
     def test_no_ffmpeg_fallback(self, tmp_path):
         """If ffmpeg is unavailable, return the original file unsplit."""
@@ -80,8 +109,8 @@ class TestSplitAudio:
 
         assert chunks == [audio]
 
-    def test_no_duration_info_still_tries_split(self, tmp_path):
-        """If duration can't be determined, still attempt the split."""
+    def test_unknown_duration_splits_until_eof(self, tmp_path):
+        """Without duration info, the segment muxer cuts until EOF — no dropped audio."""
         audio = tmp_path / "unknown.mp3"
         audio.write_bytes(b"")
 
@@ -91,14 +120,42 @@ class TestSplitAudio:
             patch("src.audio.splitter.subprocess.run") as mock_run,
             patch("src.audio.splitter.tempfile.mkdtemp", return_value=str(tmp_path / "tmp")),
         ):
+            # The muxer decides the chunk count itself at EOF; simulate it
+            # producing two chunks.
             (tmp_path / "tmp").mkdir(exist_ok=True)
-            (tmp_path / "tmp" / "part_000.mp3").write_bytes(b"")
+            for name in ("part_000.mp3", "part_001.mp3"):
+                (tmp_path / "tmp" / name).write_bytes(b"")
             mock_run.return_value = MagicMock(returncode=0)
 
             chunks = split_audio(audio, chunk_duration=590)
 
-        assert len(chunks) == 1
-        mock_run.assert_called_once()
+        # Everything the muxer produced is returned — nothing truncated to a
+        # single 590s window.
+        assert [c.name for c in chunks] == ["part_000.mp3", "part_001.mp3"]
+        # A single ffmpeg invocation, of the segment muxer (no per-chunk
+        # -ss/-t window loop that would need the total duration).
+        cmd = mock_run.call_args.args[0]
+        assert cmd[cmd.index("-f") + 1] == "segment"
+
+    def test_unknown_duration_ffmpeg_failure_fallback(self, tmp_path):
+        """A failing segment muxer falls back to the original file unsplit."""
+        import subprocess
+
+        audio = tmp_path / "unknown.mp3"
+        audio.write_bytes(b"")
+
+        with (
+            patch("src.audio.splitter._get_audio_duration", return_value=None),
+            patch("src.audio.splitter.shutil.which", return_value="/usr/bin/ffmpeg"),
+            patch(
+                "src.audio.splitter.subprocess.run",
+                side_effect=subprocess.CalledProcessError(1, "ffmpeg"),
+            ),
+            patch("src.audio.splitter.tempfile.mkdtemp", return_value=str(tmp_path / "tmp")),
+        ):
+            chunks = split_audio(audio, chunk_duration=590)
+
+        assert chunks == [audio]
 
 
 class TestCleanupChunks:

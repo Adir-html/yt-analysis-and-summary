@@ -16,7 +16,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   python -m src.cli --url <youtube-url>
   ```
   Additional flags: `--no-summary`, `--out-dir`, `--force`, `--split`,
-  `--batch-file <file>`, `--verbose`, `--quiet`.
+  `--overlap-seconds <n>`, `--batch-file <file>`, `--verbose`, `--quiet`.
+  `--overlap-seconds` sets the tail overlap between split chunks (defaults to
+  the `OPENROUTER_CHUNK_OVERLAP` env var, else 3s).
 - **Run a single test**
   ```
   pytest tests/test_module.py::test_name

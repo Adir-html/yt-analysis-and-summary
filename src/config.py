@@ -66,3 +66,15 @@ def max_tokens() -> int:
 def chunk_duration() -> int:
     """Maximum seconds per audio chunk for ``--split`` (env-overridable)."""
     return int(get_env("OPENROUTER_CHUNK_SECONDS") or 590)
+
+
+def chunk_overlap() -> int:
+    """Seconds of tail overlap between consecutive ``--split`` chunks.
+
+    Each chunk starts this many seconds *before* the previous chunk ends, so
+    speech straddling a boundary is heard in full by at least one chunk instead
+    of being cut mid-word. The transcription becomes partially self-overlapping;
+    the summary prompt is told about the overlap so duplicated seams are folded
+    away rather than double-counted.
+    """
+    return int(get_env("OPENROUTER_CHUNK_OVERLAP") or 3)

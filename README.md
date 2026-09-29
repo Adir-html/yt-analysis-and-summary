@@ -84,7 +84,10 @@ Long videos (over ~10 minutes) can exceed OpenRouter's audio transcription input
 
 ```bash
 python -m src.cli --url "...long-video..." --split
+python -m src.cli --url "...long-video..." --split --overlap-seconds 5
 ```
+
+Chunks overlap slightly by default (`--overlap-seconds`, default `3`, env `OPENROUTER_CHUNK_OVERLAP`): each chunk starts a few seconds before the previous one ends, so speech that straddles a boundary is heard in full by at least one chunk instead of being cut mid-word. The summariser prompt is aware of the overlap so repeated seam text is not double-counted.
 
 Chunk files are temporary and cleaned up automatically after transcription.
 
@@ -108,6 +111,7 @@ pytest
   - `OPENROUTER_TIMEOUT` – request timeout in seconds (default `60.0`)
   - `OPENROUTER_MAX_TOKENS` – max tokens for summaries (default `1024`)
   - `OPENROUTER_CHUNK_SECONDS` – max seconds per audio chunk for `--split` (default `590`)
+  - `OPENROUTER_CHUNK_OVERLAP` – seconds of tail overlap between consecutive chunks (default `3`; set `0` for back-to-back chunks)
 
 ## License
 MIT License updated.
