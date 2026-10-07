@@ -5,9 +5,7 @@ from .search import search_transcripts
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Search YouTube transcripts for a keyword."
-    )
+    parser = argparse.ArgumentParser(description="Search YouTube transcripts for a keyword.")
     parser.add_argument("keyword", help="Keyword to search for")
     parser.add_argument(
         "--output-dir",

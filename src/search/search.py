@@ -1,7 +1,5 @@
-
 from pathlib import Path
 import re
-
 
 TIMESTAMP_PATTERN = re.compile(r"\[(\d{1,2}:\d{2}(?::\d{2})?)\]")
 
@@ -41,4 +39,3 @@ def search_transcripts(output_dir: Path, keyword: str) -> list[dict]:
             )
 
     return results
-

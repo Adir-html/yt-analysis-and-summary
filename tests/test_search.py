@@ -1,4 +1,3 @@
-
 from src.search.search import search_transcripts
 
 
@@ -26,15 +25,13 @@ def test_search_transcripts_finds_matching_lines(tmp_path):
 def test_search_transcripts_searches_multiple_videos(tmp_path):
     first = tmp_path / "first_video_transcript.txt"
     first.write_text(
-        "Python is useful for AI.\n"
-        "JavaScript is useful for web development.\n",
+        "Python is useful for AI.\n" "JavaScript is useful for web development.\n",
         encoding="utf-8",
     )
 
     second = tmp_path / "second_video_transcript.txt"
     second.write_text(
-        "We are learning about Python today.\n"
-        "APIs are useful for connecting services.\n",
+        "We are learning about Python today.\n" "APIs are useful for connecting services.\n",
         encoding="utf-8",
     )
 
@@ -73,8 +70,7 @@ def test_search_transcripts_groups_multiple_matches_in_one_video(tmp_path):
 def test_search_transcripts_detects_timestamp(tmp_path):
     transcript = tmp_path / "timestamped_video_transcript.txt"
     transcript.write_text(
-        "[00:42] Python is useful for AI.\n"
-        "[01:12:30] Python can automate tasks.\n",
+        "[00:42] Python is useful for AI.\n" "[01:12:30] Python can automate tasks.\n",
         encoding="utf-8",
     )
 
@@ -91,5 +87,3 @@ def test_search_transcripts_detects_timestamp(tmp_path):
             "timestamp": "01:12:30",
         },
     ]
-
-
